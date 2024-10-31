@@ -1,22 +1,132 @@
 **README.md** begin with 3 bullet points. Each bullet is no more than 50 words.
 
-- **An explanation of how you scraped the data:** <br><br>
+- **An explanation of how I scraped the data:** <br><br>
 The code uses GitHub's API to scrape user profiles from Sydney with over 100 followers. It fetches user details (e.g., login, company, bio) and repositories, handling rate limits with time.sleep(). Data is saved into users.csv and repositories.csv after organizing and cleaning fields like company names and licenses.
    
-- **The most interesting and surprising fact you found after analyzing the the data:** <br><br>
+- **The most interesting and surprising fact I found after analyzing the the data:** <br><br>
 My analysis unveils a fascinating trend that Sydney developers’ repositories with the MIT license and languages like Go and JavaScript attract the highest engagement. This insight reveals how flexible licensing and strategic language choices can boost visibility and popularity, making these factors powerful tools for attracting more interaction.
    
-- **An actionable recommendation for developers based on your analysis:**<br><br>
+- **An actionable recommendation for developers based on my analysis:**<br><br>
 To maximize visibility and engagement, developers should license projects under MIT for its openness and consider coding in high-demand languages like Go and JavaScript. This combination not only attracts more contributors but also increases project appeal in the broader developer community.
-   
 
-## Analyzing Engagement Factors for GitHub Repositories in Sydney ##
+---
+# Data Scraping #
 
-### Key Objective ###
+### Analysis Steps ###
 
-The primary objective of this analysis was to identify the most influential features—such as programming language, license type, and creation date—that contribute to repositories surpassing an engagement threshold of 100 stargazers. This threshold represents a repository's level of popularity in the GitHub community.
+- **Authentication and Rate Limit Handling:** The code starts with setting up an authentication header using a GitHub personal access token. A function, `check_rate_limit`, is included to monitor and handle GitHub's API rate limits by pausing execution until the rate limit resets.
 
-### Project Setup and Analysis Steps ###
+- **Data Cleaning:** The `clean_company_name` function standardizes company names by removing leading "`@`" symbols and converting them to uppercase.
+
+- **Fetching Sydney Users:** The function `get_sydney_users` retrieves GitHub users based in Sydney with over 100 followers. For each user, it sends a request to GitHub’s search API, follows pagination to gather as many users as possible, and pauses briefly to avoid rate limits. User details like login, name, company, location, and bio are stored in a list.
+
+- **Fetching Repositories for Each User:** The `get_user_repositories` function collects repositories for each user retrieved in `get_sydney_users`. This function retrieves details such as repository name, creation date, star count, language, and license type. The loop stops after gathering up to `500` repositories.
+
+- **Writing to CSV Files:** The functions `write_users_csv` and `write_repositories_csv` save the user and repository data into two CSV files, `users.csv` and `repositories.csv`, with defined column names for each data point.
+
+- **Main Execution:** In the `main` function, the code orchestrates the entire process:
+   - Fetches Sydney-based users.
+   - Writes the user data to `users.csv`.
+   - Iterates over each user to fetch their repositories and saves the data into `repositories.csv`.
+
+
+### Complete Code ###
+
+```
+import requests
+import csv
+import time
+from datetime import datetime
+
+access_token = '<my_GitHub_personal_access_token>'
+headers = {'Authorization': f'token {access_token}'}
+
+def check_rate_limit(response):
+    if int(response.headers.get('X-RateLimit-Remaining', 0)) == 0:
+        wait_time = int(response.headers.get('X-RateLimit-Reset', 0)) - int(time.time()) + 5
+        time.sleep(wait_time)
+        return True
+    return False
+
+def clean_company_name(company):
+    return company.strip('@').upper() if company else ''
+
+def fetch_data(url):
+    response = requests.get(url, headers=headers)
+    if check_rate_limit(response):
+        response = requests.get(url, headers=headers)
+    return response.json() if response.status_code == 200 else None
+
+def get_sydney_users():
+    users, page = [], 1
+    while True:
+        data = fetch_data(f"https://api.github.com/search/users?q=location:Sydney+followers:>100&per_page=100&page={page}")
+        if not data or 'items' not in data:
+            break
+        for user in data['items']:
+            user_info = fetch_data(user.get('url'))
+            if user_info:
+                users.append({
+                    'login': user_info.get('login', ''),
+                    'name': user_info.get('name', ''),
+                    'company': clean_company_name(user_info.get('company', '')),
+                    'location': user_info.get('location', ''),
+                    'email': user_info.get('email', ''),
+                    'hireable': 'true' if user_info.get('hireable') else 'false',
+                    'bio': user_info.get('bio', ''),
+                    'public_repos': user_info.get('public_repos', 0),
+                    'followers': user_info.get('followers', 0),
+                    'following': user_info.get('following', 0),
+                    'created_at': user_info.get('created_at', '')
+                })
+        page += 1
+        time.sleep(1)
+    return users
+
+def get_user_repositories(user_login):
+    repos, page = [], 1
+    while len(repos) < 500:
+        repo_data = fetch_data(f"https://api.github.com/users/{user_login}/repos?per_page=100&page={page}&sort=pushed")
+        if not repo_data:
+            break
+        for repo in repo_data:
+            license_info = repo.get('license', {}).get('name', '') if repo.get('license', {}).get('key') != 'other' else ''
+            repos.append({
+                'login': user_login,
+                'full_name': repo.get('full_name', ''),
+                'created_at': repo.get('created_at', ''),
+                'stargazers_count': repo.get('stargazers_count', 0),
+                'watchers_count': repo.get('watchers_count', 0),
+                'language': repo.get('language', ''),
+                'has_projects': 'true' if repo.get('has_projects') else 'false',
+                'has_wiki': 'true' if repo.get('has_wiki') else 'false',
+                'license_name': license_info
+            })
+        page += 1
+        time.sleep(1)
+    return repos
+
+def write_csv(filename, data, fieldnames):
+    with open(filename, mode='w', newline='', encoding='utf-8') as file:
+        writer = csv.DictWriter(file, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(data)
+
+def main():
+    users = get_sydney_users()
+    write_csv('users.csv', users, ['login', 'name', 'company', 'location', 'email', 'hireable', 'bio', 'public_repos', 'followers', 'following', 'created_at'])
+    all_repositories = [repo for user in users for repo in get_user_repositories(user['login'])]
+    write_csv('repositories.csv', all_repositories, ['login', 'full_name', 'created_at', 'stargazers_count', 'watchers_count', 'language', 'has_projects', 'has_wiki', 'license_name'])
+
+if __name__ == "__main__":
+    main()
+
+```
+
+
+# Data Analysis #
+
+### Setup and Analysis Steps ###
 
 - **Important import libraries:**
   - `train_test_split`: Splits data into training and testing sets.
@@ -57,7 +167,6 @@ engagement_threshold = 100
 
 repositories_df['high_engagement'] = (repositories_df['stargazers_count'] > engagement_threshold).astype(int)
 
-# Features selected : language, license presence, and repository creation year.
 repos_features = repositories_df[['language', 'license_name', 'created_at']].copy()
 repos_features['year_created'] = pd.to_datetime(repositories_df['created_at']).dt.year
 
@@ -70,21 +179,18 @@ X_train, X_test, y_train, y_test = train_test_split(repos_features, target, test
 log_reg = LogisticRegression(max_iter=200)
 log_reg.fit(X_train, y_train)
 
-# Identify the most impactful feature.
 coef_df = pd.DataFrame({'Feature': X_train.columns, 'Coefficient': log_reg.coef_[0]})
 top_features = coef_df.nlargest(3, 'Coefficient')
 
 y_pred = log_reg.predict(X_test)
 classification_report_data = classification_report(y_test, y_pred, output_dict=True)
 
-# Top 3 feature most likely to cross the engagement threshold
 import ace_tools as tools; tools.display_dataframe_to_user(name="Top 3 Engagement-Predictive Features", dataframe=top_features)
 
 top_features, classification_report_data
 
-Editing TDS-Project-1/README.md at main · 23f3004236/TDS-Project-1
 ```
-### Result Table ###
+### Result Table and Findings ###
 Below are the top three features most associated with crossing the engagement threshold (100 stargazers):
 
 | Rank | Feature          | Coefficient |
@@ -93,7 +199,6 @@ Below are the top three features most associated with crossing the engagement th
 | 2    | Go Language      | 0.314887    |
 | 3    | JavaScript       | 0.218959    |
 
-### Findings ###
 
 The model’s results reveal that license type and language choice are the strongest predictors of high engagement for repositories. The analysis suggests that the ***MIT license*** and specific languages like ***Go*** and ***JavaScript*** enhance repository visibility and popularity, especially among the Sydney GitHub community. This analysis underscores how license flexibility and language preference can impact repository engagement. By making informed choices about licensing and technology stack, developers can potentially attract more visibility and interaction for their projects.
 
